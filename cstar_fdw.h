@@ -25,7 +25,8 @@
 /* User-visible name for logging and reporting purposes */
 #define CSTAR_FDW_NAME				"cassandra_fdw"
 #define MSECS_PER_SEC				1000
-#define LITERAL_UTC				"UTC"
+#define LITERAL_UTC					"UTC"
+#define DEFAULT_CONSISTENCY_LEVEL	CASS_CONSISTENCY_LOCAL_ONE
 
 /* in cstar_connect.c */
 extern CassSession *pgcass_GetConnection(ForeignServer *server, UserMapping *user,

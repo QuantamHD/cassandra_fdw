@@ -89,6 +89,8 @@ static struct CassFdwOption valid_options[] =
 	{ "table_name",	ForeignTableRelationId },
 	/* Pre-req for UPDATE and DELETE support */
 	{ OPT_PK,	ForeignTableRelationId },
+	{ "read_consistency",	ForeignTableRelationId },
+	{ "write_consistency",	ForeignTableRelationId },
 	/* Sentinel */
 	{ NULL,			InvalidOid }
 };
@@ -128,6 +130,7 @@ typedef struct CassFdwModifyState
 	CassSession   *cass_conn; /* connection for the modify */
 	bool           sql_sent;
 	CassStatement *statement;
+	CassConsistency write_consistency;
 
 	/* extracted fdw_private data */
 	char	   *query;			/* text of INSERT/UPDATE/DELETE command */
@@ -181,6 +184,7 @@ typedef struct CassFdwScanState
 	CassSession	   *cass_conn;			/* connection for the scan */
 	bool			sql_sended;
 	CassStatement  *statement;
+	CassConsistency read_consistency;
 
 	/* for storing result tuples */
 	HeapTuple  *tuples;			/* array of currently-retrieved tuples */
@@ -213,7 +217,7 @@ extern Datum cstar_fdw_validator(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(cstar_fdw_handler);
 PG_FUNCTION_INFO_V1(cstar_fdw_validator);
-
+static CassConsistency consistency_from_string(const char *s);
 
 /*
  * FDW callback routines
@@ -278,11 +282,18 @@ static void
 cassGetOptions(Oid foreigntableid,
 			   char **host, int *port,
 			   char **username, char **password,
-			   char **query, char **tablename, char **primarykey);
+			   char **query, char **tablename, char **primarykey, CassConsistency *read_consistency,  CassConsistency *write_consistency);
 static void
 cassGetPKOption(Oid foreigntableid,
 				const char **primarykey);
 static void create_cursor(ForeignScanState *node);
+static void
+cassGetReadConsistencyOption(Oid foreigntableid,
+				CassConsistency *read_consistency);
+static void
+cassGetWriteConsistencyOption(Oid foreigntableid,
+				CassConsistency *write_consistency);
+
 static void close_cursor(CassFdwScanState *fsstate);
 static void fetch_more_data(ForeignScanState *node);
 static void pgcass_transferValue(StringInfo buf, const CassValue* value);
@@ -367,6 +378,8 @@ cstar_fdw_validator(PG_FUNCTION_ARGS)
 	char		*svr_table = NULL;
 	char		*primary_key = NULL;
 	ListCell	*cell;
+	CassConsistency	read_consistency = DEFAULT_CONSISTENCY_LEVEL;
+	CassConsistency	write_consistency = DEFAULT_CONSISTENCY_LEVEL;
 
 	/*
 	 * Check that only options supported by cassandra_fdw,
@@ -479,6 +492,27 @@ cstar_fdw_validator(PG_FUNCTION_ARGS)
 				         errmsg("conflicting or redundant options")));
 			primary_key = defGetString(def);
 		}
+		if (strcmp(def->defname, "read_consistency") == 0)
+		{
+			read_consistency = consistency_from_string(defGetString(def));
+			if (read_consistency == CASS_CONSISTENCY_UNKNOWN)
+				ereport(ERROR,
+				        (errcode(ERRCODE_SYNTAX_ERROR),
+				         errmsg("unknown read consistency level")));
+			else if (read_consistency == CASS_CONSISTENCY_ANY)
+				ereport(ERROR,
+				        (errcode(ERRCODE_SYNTAX_ERROR),
+				         errmsg("ANY is only supported as a write consistency level, it is not a valid read consistency level")));
+		}
+
+		if (strcmp(def->defname, "write_consistency") == 0)
+		{
+			write_consistency = consistency_from_string(defGetString(def));
+			if (write_consistency == CASS_CONSISTENCY_UNKNOWN)
+				ereport(ERROR,
+				        (errcode(ERRCODE_SYNTAX_ERROR),
+				         errmsg("unknown write consistency level")));
+		}
 	}
 
 	if (catalog == ForeignServerRelationId && svr_host == NULL)
@@ -494,7 +528,22 @@ cstar_fdw_validator(PG_FUNCTION_ARGS)
 
 	PG_RETURN_VOID();
 }
-
+static CassConsistency
+consistency_from_string(const char *s)
+{
+	if (strcmp(s, "ANY") == 0) return CASS_CONSISTENCY_ANY;
+	else if (strcmp(s, "ONE") == 0) return CASS_CONSISTENCY_ONE;
+	else if (strcmp(s, "TWO") == 0) return CASS_CONSISTENCY_TWO;
+	else if (strcmp(s, "THREE") == 0) return CASS_CONSISTENCY_THREE;
+	else if (strcmp(s,  "QUORUM") == 0) return CASS_CONSISTENCY_QUORUM;
+	else if (strcmp(s, "ALL") == 0) return CASS_CONSISTENCY_ALL;
+	else if (strcmp(s, "LOCAL_QUORUM") == 0) return CASS_CONSISTENCY_LOCAL_QUORUM;
+	else if (strcmp(s, "EACH_QUORUM") == 0) return CASS_CONSISTENCY_EACH_QUORUM;
+	else if (strcmp(s, "SERIAL") == 0) return CASS_CONSISTENCY_SERIAL;
+	else if (strcmp(s, "LOCAL_SERIAL") == 0) return CASS_CONSISTENCY_LOCAL_SERIAL;
+	else if (strcmp(s, "LOCAL_ONE") == 0) return CASS_CONSISTENCY_LOCAL_ONE;
+	else return CASS_CONSISTENCY_UNKNOWN;
+}
 
 /*
  * Check if the provided option is one of the valid options.
@@ -520,7 +569,7 @@ cassIsValidOption(const char *option, Oid context)
 static void
 cassGetOptions(Oid foreigntableid, char **host, int *port,
 				char **username, char **password, char **query,
-				char **tablename, char **primarykey)
+				char **tablename, char **primarykey, CassConsistency *read_consistency, CassConsistency *write_consistency)
 {
 	ForeignTable  *table;
 	ForeignServer *server;
@@ -540,7 +589,7 @@ cassGetOptions(Oid foreigntableid, char **host, int *port,
 	options = list_concat(options, server->options);
 	options = list_concat(options, user->options);
 
-	/* Loop through the options, and get the server/port */
+	/* Loop through the options */
 	foreach(lc, options)
 	{
 		DefElem *def = (DefElem *) lfirst(lc);
@@ -573,6 +622,14 @@ cassGetOptions(Oid foreigntableid, char **host, int *port,
 		{
 			*primarykey = defGetString(def);
 		}
+		else if (strcmp(def->defname, "read_consistency") == 0)
+		{
+			*read_consistency = consistency_from_string(defGetString(def));
+		}
+		else if (strcmp(def->defname, "write_consistency") == 0)
+		{
+			*write_consistency = consistency_from_string(defGetString(def));
+		}
 
 	}
 }
@@ -602,6 +659,65 @@ cassGetPKOption(Oid foreigntableid,
 		if (strcmp(def->defname, OPT_PK) == 0)
 		{
 			*primarykey = defGetString(def);
+		}
+	}
+}
+
+/*
+ * Fetch the read_consistency option for a FOREIGN TABLE without returning the
+ * remaining options; the read_consistency is the only one needed for certain calls
+ */
+static void
+cassGetReadConsistencyOption(Oid foreigntableid,
+                CassConsistency *read_consistency)
+{
+	ForeignTable *table;
+	List         *options;
+	ListCell     *lc;
+
+	*read_consistency = DEFAULT_CONSISTENCY_LEVEL;
+	table = GetForeignTable(foreigntableid);
+	options = NIL;
+	options = list_concat(options, table->options);
+
+	/* Loop through the options to get the read_consistency option. */
+	foreach(lc, options)
+	{
+		DefElem *def = (DefElem *) lfirst(lc);
+
+		if (strcmp(def->defname, "read_consistency") == 0)
+		{
+			*read_consistency = consistency_from_string(defGetString(def));
+		}
+	}
+}
+
+/*
+ * Fetch the write_consistency option for a FOREIGN TABLE without returning the
+ * remaining options; the write_consistency is the only one needed for certain calls
+ */
+
+static void
+cassGetWriteConsistencyOption(Oid foreigntableid,
+                CassConsistency *write_consistency)
+{
+	ForeignTable *table;
+	List         *options;
+	ListCell     *lc;
+
+	*write_consistency = DEFAULT_CONSISTENCY_LEVEL;
+
+	table = GetForeignTable(foreigntableid);
+	options = NIL;
+	options = list_concat(options, table->options);
+
+	/* Loop through the options to get the write_consistency option. */
+	foreach(lc, options)
+	{
+		DefElem *def = (DefElem *) lfirst(lc);
+		if (strcmp(def->defname, "write_consistency") == 0)
+		{
+			*write_consistency = consistency_from_string(defGetString(def));
 		}
 	}
 }
@@ -643,7 +759,6 @@ cassGetForeignRelSize(PlannerInfo *root,
 					   &fpinfo->attrs_used);
 	}
 
-	//TODO
 	/* Fetch options  */
 
 	/* Estimate relation size */
@@ -721,7 +836,6 @@ cassGetForeignPaths(PlannerInfo *root,
 	                               NIL);		/* no fdw_private list */
 	add_path(baserel, (Path *) path);
 
-	//TODO
 }
 
 /*
@@ -801,6 +915,10 @@ cassExplainForeignScan(ForeignScanState *node, ExplainState *es)
 	char	*svr_table = NULL;
 	char	*primary_key = NULL;
 
+	CassConsistency	read_consistency = DEFAULT_CONSISTENCY_LEVEL;
+	CassConsistency	write_consistency = DEFAULT_CONSISTENCY_LEVEL;
+
+
 	elog(DEBUG1, CSTAR_FDW_NAME ": explain foreign scan for relation ID %d",
 	     RelationGetRelid(node->ss.ss_currentRelation));
 
@@ -810,7 +928,7 @@ cassExplainForeignScan(ForeignScanState *node, ExplainState *es)
 		cassGetOptions(RelationGetRelid(node->ss.ss_currentRelation),
 					   &svr_host, &svr_port,
 					   &svr_username, &svr_password,
-					   &svr_query, &svr_table, &primary_key);
+					   &svr_query, &svr_table, &primary_key, &read_consistency, &write_consistency);
 
 		fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
 		sql = strVal(list_nth(fdw_private, CassFdwScanPrivateSelectSql));
@@ -869,6 +987,8 @@ cassBeginForeignScan(ForeignScanState *node, int eflags)
 	 */
 	fsstate->cass_conn = pgcass_GetConnection(server, user, false);
 	fsstate->sql_sended = false;
+
+	cassGetReadConsistencyOption(RelationGetRelid(fsstate->rel), &fsstate->read_consistency);
 
 	/* Get private info created by planner functions. */
 	fsstate->query = strVal(list_nth(fsplan->fdw_private,
@@ -1256,6 +1376,8 @@ static void cassBeginForeignModify(ModifyTableState *mtstate,
 	fmstate->cass_conn = pgcass_GetConnection(server, user, false);
 	fmstate->sql_sent = false;
 
+	cassGetWriteConsistencyOption(RelationGetRelid(fmstate->rel), &fmstate->write_consistency);
+
 	/* Deconstruct fdw_private data. */
 	fmstate->query = strVal(list_nth(fdw_private,
 									 FdwModifyPrivateUpdateSql));
@@ -1436,6 +1558,7 @@ static TupleTableSlot *cassExecForeignInsert(EState *estate,
 		Assert(pindex == fmstate->p_nums);
 	}
 
+	cass_statement_set_consistency(fmstate->statement, fmstate->write_consistency);
 	future = cass_session_execute(fmstate->cass_conn, fmstate->statement);
 	fmstate->sql_sent = true;
 	cass_future_wait(future);
@@ -1573,6 +1696,7 @@ fetch_more_data(ForeignScanState *node)
 	oldcontext = MemoryContextSwitchTo(fsstate->batch_cxt);
 
 	{
+		cass_statement_set_consistency(fsstate->statement, fsstate->read_consistency);
 		CassFuture* result_future = cass_session_execute(fsstate->cass_conn, fsstate->statement);
 		if (cass_future_error_code(result_future) == CASS_OK)
 		{
@@ -2113,6 +2237,7 @@ cassExecPKPredWrite(EState *estate,
 	pindex++;
 	Assert(pindex == fmstate->p_nums);
 
+	cass_statement_set_consistency(fmstate->statement, fmstate->write_consistency);
 	future = cass_session_execute(fmstate->cass_conn, fmstate->statement);
 	fmstate->sql_sent = true;
 	cass_future_wait(future);
