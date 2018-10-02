@@ -217,6 +217,7 @@ extern Datum cstar_fdw_validator(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(cstar_fdw_handler);
 PG_FUNCTION_INFO_V1(cstar_fdw_validator);
+
 static CassConsistency consistency_from_string(const char *s);
 
 /*
@@ -286,14 +287,13 @@ cassGetOptions(Oid foreigntableid,
 static void
 cassGetPKOption(Oid foreigntableid,
 				const char **primarykey);
-static void create_cursor(ForeignScanState *node);
 static void
 cassGetReadConsistencyOption(Oid foreigntableid,
 				CassConsistency *read_consistency);
 static void
 cassGetWriteConsistencyOption(Oid foreigntableid,
 				CassConsistency *write_consistency);
-
+static void create_cursor(ForeignScanState *node);
 static void close_cursor(CassFdwScanState *fsstate);
 static void fetch_more_data(ForeignScanState *node);
 static void pgcass_transferValue(StringInfo buf, const CassValue* value);
@@ -378,6 +378,7 @@ cstar_fdw_validator(PG_FUNCTION_ARGS)
 	char		*svr_table = NULL;
 	char		*primary_key = NULL;
 	ListCell	*cell;
+
 	CassConsistency	read_consistency = DEFAULT_CONSISTENCY_LEVEL;
 	CassConsistency	write_consistency = DEFAULT_CONSISTENCY_LEVEL;
 

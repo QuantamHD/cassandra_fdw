@@ -86,10 +86,12 @@ CREATE USER MAPPING FOR public SERVER cass_serv
 
 -- CREATE a FOREIGN TABLE.
 --
--- Note that a valid "primary_key" OPTION is required in order to use
--- UPDATE or DELETE support.
+-- Notes:
+--   + a valid "primary_key" OPTION is required in order to use UPDATE or DELETE support.
+--   + the read and write consistency OPTION is optional & both default to LOCAL_ONE
+--
 CREATE FOREIGN TABLE test (id int) SERVER cass_serv
-    OPTIONS (schema_name 'example', table_name 'oorder', primary_key 'id');
+    OPTIONS (schema_name 'example', table_name 'oorder', primary_key 'id', read_consistency 'ALL', write_consistency 'ALL');
 
 -- Query the FOREIGN TABLE.
 SELECT * FROM test LIMIT 5;
