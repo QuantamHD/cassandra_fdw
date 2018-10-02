@@ -1,3 +1,17 @@
+/*-------------------------------------------------------------------------
+ *
+ * cstar_fdw.c
+ *                cassandra_fdw.
+ *
+ * Copyright (c) 2014-2018, BigSQL
+ * Portions Copyright (c) 2012-2018, PostgreSQL Global Development Group & Others
+ *
+ * IDENTIFICATION
+ *                contrib/cassandra_fdw/cstar_fdw.c
+ *
+ *-------------------------------------------------------------------------
+ */
+
 #include "postgres.h"
 
 #include <cassandra.h>

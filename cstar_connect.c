@@ -1,3 +1,17 @@
+/*-------------------------------------------------------------------------
+ *
+ * cstar_connect.c
+ *                cassandra_fdw connection pooler.
+ *
+ * Copyright (c) 2014-2018, BigSQL
+ * Portions Copyright (c) 2012-2018, PostgreSQL Global Development Group & Others
+ *
+ * IDENTIFICATION
+ *                contrib/cassandra_fdw/cstar_connect.c
+ *
+ *-------------------------------------------------------------------------
+ */
+
 #include "postgres.h"
 
 #include "cstar_fdw.h"
@@ -26,6 +40,7 @@ typedef struct ConnCacheEntry
 	bool		have_prep_stmt; /* have we prepared any stmts in this xact? */
 	bool		have_error;		/* have any subxacts aborted in this xact? */
 } ConnCacheEntry;
+
 
 /*
  * Connection cache (initialized on first use)
@@ -122,6 +137,7 @@ pgcass_GetConnection(ForeignServer *server, UserMapping *user,
 	return entry->conn;
 }
 
+
 /*
  * Release connection reference count created by calling GetConnection.
  */
@@ -142,6 +158,7 @@ pgcass_ReleaseConnection(CassSession *session)
 	cass_future_wait(close_future);
 	cass_future_free(close_future);
 }
+
 
 /*
  * Connect to remote server using specified server and user mapping properties.
@@ -321,6 +338,7 @@ pgcass_report_error(int elevel, CassFuture* result_future,
 	if (clear)
 		cass_future_free(result_future);
 }
+
 
 /*
  * Generate key-value arrays which include only libpq options from the
