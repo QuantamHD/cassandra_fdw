@@ -28,24 +28,20 @@ PostgreSQL source tree and change into the FDW subdirectory:
 cd cassandra_fdw
 ```
 
-### Build and Install cpp-driver ###
-
-Check out *version 2.4.3* of the cpp-driver:
-
+### Install cpp-driver ###
 ```sh
-git clone git@github.com:datastax/cpp-driver.git
-cd cpp-driver
-git checkout 2.4.3
-```
+## enable EPEL
+wget http://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+sudo rpm -ivh epel-release-latest-7.noarch.rpm 
 
-Next, build and install it.  We show an example on Linux using
-developer-defaults with all the transitive dependencies installed.  For more information, please see the
-[Build Documentation](http://datastax.github.io/cpp-driver/topics/building/)
-from the cpp-driver project.
+## install LIBUV
+sudo yum update
+sudo yum install libuv-devel
 
-```sh
-cmake .
-make && make install # with sudo if necessary
+## install CPP-DRIVER
+CPP_DIR=http://downloads.datastax.com/cpp-driver/centos/7/cassandra/v2.9.0
+sudo yum install $CPP_DIR/cassandra-cpp-driver-2.9.0-1.el7.centos.x86_64.rpm
+sudo yum install $CPP_DIR/cassandra-cpp-driver-devel-2.9.0-1.el7.centos.x86_64.rpm
 ```
 
 ### Build and Install the FDW ###
