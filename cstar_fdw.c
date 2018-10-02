@@ -208,7 +208,6 @@ enum CassFdwScanPrivateIndex
 	CassFdwScanPrivateRetrievedAttrs
 };
 
-
 /*
  * SQL functions
  */
@@ -505,7 +504,6 @@ cstar_fdw_validator(PG_FUNCTION_ARGS)
 				        (errcode(ERRCODE_SYNTAX_ERROR),
 				         errmsg("ANY is only supported as a write consistency level, it is not a valid read consistency level")));
 		}
-
 		if (strcmp(def->defname, "write_consistency") == 0)
 		{
 			write_consistency = consistency_from_string(defGetString(def));
@@ -529,6 +527,7 @@ cstar_fdw_validator(PG_FUNCTION_ARGS)
 
 	PG_RETURN_VOID();
 }
+
 static CassConsistency
 consistency_from_string(const char *s)
 {
@@ -545,6 +544,7 @@ consistency_from_string(const char *s)
 	else if (strcmp(s, "LOCAL_ONE") == 0) return CASS_CONSISTENCY_LOCAL_ONE;
 	else return CASS_CONSISTENCY_UNKNOWN;
 }
+
 
 /*
  * Check if the provided option is one of the valid options.
@@ -631,7 +631,6 @@ cassGetOptions(Oid foreigntableid, char **host, int *port,
 		{
 			*write_consistency = consistency_from_string(defGetString(def));
 		}
-
 	}
 }
 
@@ -677,6 +676,7 @@ cassGetReadConsistencyOption(Oid foreigntableid,
 	ListCell     *lc;
 
 	*read_consistency = DEFAULT_CONSISTENCY_LEVEL;
+
 	table = GetForeignTable(foreigntableid);
 	options = NIL;
 	options = list_concat(options, table->options);
