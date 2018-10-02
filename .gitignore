@@ -1,3 +1,5 @@
 cpp-driver
 auto/
 /doc.tex
+*.o
+*.so

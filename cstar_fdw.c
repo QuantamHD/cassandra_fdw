@@ -42,16 +42,6 @@
 #include "utils/lsyscache.h"
 #include "utils/timestamp.h"
 
-#if PG_VERSION_NUM >= 90300
-#    define CSTAR_FDW_WRITE_API
-#endif  /* PG_VERSION_NUM >= 90300 */
-
-#if PG_VERSION_NUM >= 90500
-#define CSTAR_FDW_IMPORT_API
-#else
-#undef CSTAR_FDW_IMPORT_API
-#endif  /* PG_VERSION_NUM >= 90500 */
-
 PG_MODULE_MAGIC;
 
 /* Default CPU cost to start up a foreign query. */
@@ -89,7 +79,6 @@ static struct CassFdwOption valid_options[] =
 	{ NULL,			InvalidOid }
 };
 
-#ifdef CSTAR_FDW_WRITE_API
 
 /*
  * This enum describes what's kept in the fdw_private list for a ModifyTable
@@ -140,7 +129,6 @@ typedef struct CassFdwModifyState
 	/* working memory context */
 	MemoryContext temp_cxt;		/* context for per-tuple temporary data */
 } CassFdwModifyState;
-#endif  /* CSTAR_FDW_WRITE_API */
 
 /*
  * FDW-specific information for RelOptInfo.fdw_private.
@@ -224,21 +212,16 @@ static ForeignScan *cassGetForeignPlan(
 							Oid foreigntableid,
 							ForeignPath *best_path,
 							List *tlist,
-							List *scan_clauses
-#if PG_VERSION_NUM >= 90500
-							, Plan *outer_plan
-#endif  /* PG_VERSION_NUM >= 90500 */
+							List *scan_clauses,
+							Plan *outer_plan
 );
 static void cassExplainForeignScan(ForeignScanState *node, ExplainState *es);
 static void cassBeginForeignScan(ForeignScanState *node, int eflags);
 static TupleTableSlot *cassIterateForeignScan(ForeignScanState *node);
 static void cassReScanForeignScan(ForeignScanState *node);
 static void cassEndForeignScan(ForeignScanState *node);
-#ifdef CSTAR_FDW_IMPORT_API
 static List *cassImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid);
-#endif  /* CSTAR_FDW_IMPORT_API */
 
-#ifdef CSTAR_FDW_WRITE_API
 static void
 cassAddForeignUpdateTargets(Query *parsetree,
 							RangeTblEntry *target_rte,
@@ -267,7 +250,7 @@ static void cassExplainForeignModify(ModifyTableState *mtstate,
 						 int subplan_index,
 						 struct ExplainState *es);
 static int	cassIsForeignRelUpdatable(Relation rel);
-#endif /* CSTAR_FDW_WRITE_API */
+
 /*
  * Helper functions
  */
@@ -289,9 +272,7 @@ static void create_cursor(ForeignScanState *node);
 static void close_cursor(CassFdwScanState *fsstate);
 static void fetch_more_data(ForeignScanState *node);
 static void pgcass_transferValue(StringInfo buf, const CassValue* value);
-#ifdef CSTAR_FDW_IMPORT_API
 static void pgcass_transformDataType(StringInfo buf, CassValueType type);
-#endif  /* CSTAR_FDW_IMPORT_API */
 static HeapTuple make_tuple_from_result_row(const CassRow* row,
 										   int ncolumn,
 										   Relation rel,
@@ -304,7 +285,6 @@ static void cassClassifyConditions(PlannerInfo *root,
 				   List *input_conds,
 				   List **remote_conds,
 				   List **local_conds);
-#ifdef CSTAR_FDW_WRITE_API
 static void
 cassStatementBindNull(const CassStatement * stmt,
 					  int pindex, Oid ptypeid, const char *opname,
@@ -319,7 +299,6 @@ cassExecPKPredWrite(EState *estate,
 					TupleTableSlot *slot,
 					TupleTableSlot *planSlot,
                     const char *cqlOpName);
-#endif /* CSTAR_FDW_WRITE_API */
 
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
@@ -340,11 +319,8 @@ cstar_fdw_handler(PG_FUNCTION_ARGS)
 	fdwroutine->ReScanForeignScan = cassReScanForeignScan;
 	fdwroutine->EndForeignScan = cassEndForeignScan;
 	fdwroutine->AnalyzeForeignTable = NULL;
-#ifdef CSTAR_FDW_IMPORT_API
 	fdwroutine->ImportForeignSchema = cassImportForeignSchema;
-#endif  /* CSTAR_FDW_IMPORT_API */
 
-#ifdef CSTAR_FDW_WRITE_API
 	fdwroutine->AddForeignUpdateTargets = cassAddForeignUpdateTargets;
 	fdwroutine->PlanForeignModify = cassPlanForeignModify;
 	fdwroutine->BeginForeignModify = cassBeginForeignModify;
@@ -354,7 +330,6 @@ cstar_fdw_handler(PG_FUNCTION_ARGS)
 	fdwroutine->EndForeignModify = cassEndForeignModify;
 	fdwroutine->ExplainForeignModify = cassExplainForeignModify;
 	fdwroutine->IsForeignRelUpdatable = cassIsForeignRelUpdatable;
-#endif /* CSTAR_FDW_WRITE_API */
 	PG_RETURN_POINTER(fdwroutine);
 }
 
@@ -617,7 +592,6 @@ cassGetPKOption(Oid foreigntableid,
 	}
 }
 
-//#if (PG_VERSION_NUM >= 90200)
 
 /*
  * cassGetForeignRelSize
@@ -645,13 +619,8 @@ cassGetForeignRelSize(PlannerInfo *root,
 					   &fpinfo->remote_conds, &fpinfo->local_conds);
 
 	fpinfo->attrs_used = NULL;
-#if (PG_VERSION_NUM < 90600)
-	pull_varattnos((Node *) baserel->reltargetlist, baserel->relid,
-				   &fpinfo->attrs_used);
-#else
 	pull_varattnos((Node *) baserel->reltarget->exprs, baserel->relid,
 				   &fpinfo->attrs_used);
-#endif /* PG_VERSION_NUM < 90600 */
 	foreach(lc, fpinfo->local_conds)
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
@@ -677,13 +646,8 @@ cassGetForeignRelSize(PlannerInfo *root,
 		if (baserel->pages == 0 && baserel->tuples == 0)
 		{
 			baserel->pages = 10;
-#if (PG_VERSION_NUM < 90600)
-			baserel->tuples =
-				(10 * BLCKSZ) / (baserel->width + sizeof(HeapTupleHeaderData));
-#else
 			baserel->tuples =
 				(10 * BLCKSZ) / (baserel->reltarget->width + sizeof(HeapTupleHeaderData));
-#endif /* PG_VERSION_NUM < 90600 */
 
 		}
 
@@ -705,12 +669,7 @@ estimate_path_cost_size(PlannerInfo *root,
 						Cost *p_startup_cost, Cost *p_total_cost)
 {
 	*p_rows = baserel->rows;
-#if (PG_VERSION_NUM < 90600)
-	*p_width = baserel->width;
-#else
 	*p_width = baserel->reltarget->width;
-#endif /* PG_VERSION_NUM < 90600 */
-
 	*p_startup_cost = DEFAULT_FDW_STARTUP_COST;
 	*p_total_cost = DEFAULT_FDW_TUPLE_COST * 100;
 }
@@ -737,24 +696,6 @@ cassGetForeignPaths(PlannerInfo *root,
 	 * actually be an indexscan happening there).  We already did all the work
 	 * to estimate cost and size of this path.
 	 */
-#if PG_VERSION_NUM < 90500
-	path = create_foreignscan_path(root, baserel,
-								   fpinfo->rows + baserel->rows,
-								   fpinfo->startup_cost,
-								   fpinfo->total_cost,
-								   NIL, /* no pathkeys */
-								   NULL,		/* no outer rel either */
-								   NIL);		/* no fdw_private list */
-#elif PG_VERSION_NUM < 90600
-	path = create_foreignscan_path(root, baserel,
-	                               fpinfo->rows + baserel->rows,
-	                               fpinfo->startup_cost,
-	                               fpinfo->total_cost,
-	                               NIL, /* no pathkeys */
-	                               NULL,		/* no outer rel either */
-	                               NULL,		/* no outer path either */
-	                               NIL);		/* no fdw_private list */
-#else
 	path = create_foreignscan_path(root, baserel,
 								   NULL,
 	                               fpinfo->rows + baserel->rows,
@@ -764,7 +705,6 @@ cassGetForeignPaths(PlannerInfo *root,
 	                               NULL,		/* no outer rel either */
 	                               NULL,		/* no outer path either */
 	                               NIL);		/* no fdw_private list */
-#endif
 	add_path(baserel, (Path *) path);
 
 	//TODO
@@ -780,10 +720,8 @@ cassGetForeignPlan(PlannerInfo *root,
 					   Oid foreigntableid,
 					   ForeignPath *best_path,
 					   List *tlist,
-					   List *scan_clauses
-#if PG_VERSION_NUM >= 90500
-                   , Plan *outer_plan
-#endif  /* PG_VERSION_NUM >= 90500 */
+					   List *scan_clauses,
+					   Plan *outer_plan
 )
 {
 	CassFdwPlanState *fpinfo = (CassFdwPlanState *) baserel->fdw_private;
@@ -821,13 +759,6 @@ cassGetForeignPlan(PlannerInfo *root,
 	 * field of the finished plan node; we can't keep them in private state
 	 * because then they wouldn't be subject to later planner processing.
 	 */
-#if PG_VERSION_NUM < 90500
-	return make_foreignscan(tlist,
-							local_exprs,
-							scan_relid,
-							NIL,
-							fdw_private);
-#else
 	return make_foreignscan(tlist,
 	                        local_exprs,
 	                        scan_relid,
@@ -836,10 +767,7 @@ cassGetForeignPlan(PlannerInfo *root,
 	                        NIL,
 	                        NIL,
 							NULL);
-#endif
 }
-
-//#endif /* #if (PG_VERSION_NUM >= 90200) */
 
 /*
  * cassExplainForeignScan
@@ -1051,7 +979,6 @@ cassEndForeignScan(ForeignScanState *node)
 	/* MemoryContexts will be deleted automatically. */
 }
 
-#ifdef CSTAR_FDW_WRITE_API
 /*
  * cassAddForeignUpdateTargets
  * 		Add the PRIMARY KEY column as resjunk entry.
@@ -1142,107 +1069,6 @@ cassAddForeignUpdateTargets(Query *parsetree,
 	}
 }
 
-#if PG_VERSION_NUM < 90500
-
-/*
- * Backport of bms_next_member() from bitmapset.c off PG 9.5 to enable UPDATE
- * support with prior PostgreSQL versions.  We believe that this is not a big
- * infrastructure overhead for receiving a good bitmap iteration API.
- */
-
-#define WORDNUM(x)	((x) / BITS_PER_BITMAPWORD)
-#define BITNUM(x)	((x) % BITS_PER_BITMAPWORD)
-
-/*
- * Lookup tables to avoid need for bit-by-bit groveling
- *
- * rightmost_one_pos[x] gives the bit number (0-7) of the rightmost one bit
- * in a nonzero byte value x.  The entry for x=0 is never used.
- *
- * number_of_ones[x] gives the number of one-bits (0-8) in a byte value x.
- *
- * We could make these tables larger and reduce the number of iterations
- * in the functions that use them, but bytewise shifts and masks are
- * especially fast on many machines, so working a byte at a time seems best.
- */
-
-static const uint8 rightmost_one_pos[256] = {
-	0, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	7, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	6, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	5, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0,
-	4, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 0, 1, 0
-};
-
-/*
- * bms_next_member - find next member of a set
- *
- * Returns smallest member greater than "prevbit", or -2 if there is none.
- * "prevbit" must NOT be less than -1, or the behavior is unpredictable.
- *
- * This is intended as support for iterating through the members of a set.
- * The typical pattern is
- *
- *			x = -1;
- *			while ((x = bms_next_member(inputset, x)) >= 0)
- *				process member x;
- *
- * Notice that when there are no more members, we return -2, not -1 as you
- * might expect.  The rationale for that is to allow distinguishing the
- * loop-not-started state (x == -1) from the loop-completed state (x == -2).
- * It makes no difference in simple loop usage, but complex iteration logic
- * might need such an ability.
- */
-static int
-bms_next_member(const Bitmapset *a, int prevbit)
-{
-	int			nwords;
-	int			wordnum;
-	bitmapword	mask;
-
-	if (a == NULL)
-		return -2;
-	nwords = a->nwords;
-	prevbit++;
-	mask = (~(bitmapword) 0) << BITNUM(prevbit);
-	for (wordnum = WORDNUM(prevbit); wordnum < nwords; wordnum++)
-	{
-		bitmapword	w = a->words[wordnum];
-
-		/* ignore bits before prevbit */
-		w &= mask;
-
-		if (w != 0)
-		{
-			int			result;
-
-			result = wordnum * BITS_PER_BITMAPWORD;
-			while ((w & 255) == 0)
-			{
-				w >>= 8;
-				result += 8;
-			}
-			result += rightmost_one_pos[w & 255];
-			return result;
-		}
-
-		/* in subsequent words, consider all bits */
-		mask = (~(bitmapword) 0);
-	}
-	return -2;
-}
-#endif /* PG_VERSION_NUM < 90500 */
 
 /*
  * cassPlanForeignModify
@@ -1300,11 +1126,7 @@ cassPlanForeignModify(PlannerInfo *root,
 	else if (operation == CMD_UPDATE)
 	{
 		int			col;
-#if PG_VERSION_NUM < 90500
-		Bitmapset		*updatedCols = rte->modifiedCols;
-#else
 		Bitmapset		*updatedCols = rte->updatedCols;
-#endif /* PG_VERSION_NUM < 90500 */
 
 		col = -1;
 		while ((col = bms_next_member(updatedCols, col)) >= 0)
@@ -1318,7 +1140,6 @@ cassPlanForeignModify(PlannerInfo *root,
 		}
 	}
 
-#if PG_VERSION_NUM >= 90500
 	/*
 	 * ON CONFLICT DO UPDATE and DO NOTHING case with inference specification
 	 * should have already been rejected in the optimizer, as presently there
@@ -1330,7 +1151,6 @@ cassPlanForeignModify(PlannerInfo *root,
 	else if (plan->onConflictAction != ONCONFLICT_NONE)
 		elog(ERROR, "unexpected ON CONFLICT specification: %d",
 			 (int) plan->onConflictAction);
-#endif /* PG_VERSION_NUM >= 90500 */
 
 	cassGetPKOption(rte->relid, &primaryKey);
 	/*
@@ -1690,7 +1510,6 @@ static int	cassIsForeignRelUpdatable(Relation rel)
 	 */
 	return (1 << CMD_UPDATE) | (1 << CMD_INSERT) | (1 << CMD_DELETE);
 }
-#endif /* CSTAR_FDW_WRITE_API */
 
 /*
  * Create cursor for node's query with current parameter values.
@@ -1987,7 +1806,6 @@ pgcass_transferValue(StringInfo buf, const CassValue* value)
 	}
 }
 
-#ifdef CSTAR_FDW_IMPORT_API
 static void
 pgcass_transformDataType(StringInfo buf, CassValueType type)
 {
@@ -2077,7 +1895,6 @@ pgcass_transformDataType(StringInfo buf, CassValueType type)
 		        (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 		         errmsg("Data type %s not supported.", invalid_datatype)));
 }
-#endif  /* CSTAR_FDW_IMPORT_API */
 
 /*
  * Examine each qual clause in input_conds, and classify them into two groups,
@@ -2105,7 +1922,6 @@ cassClassifyConditions(PlannerInfo *root,
 	}
 }
 
-#ifdef CSTAR_FDW_WRITE_API
 /*
  * bind_cass_statement_param
  *
@@ -2311,9 +2127,6 @@ cassExecPKPredWrite(EState *estate,
 	return slot;
 }
 
-#endif /* CSTAR_FDW_WRITE_API */
-
-#ifdef CSTAR_FDW_IMPORT_API
 /*
  * cassImportForeignSchema
  *		Generates CREATE FOREIGN TABLE statements for each of the tables
@@ -2395,4 +2208,3 @@ cassImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 	cass_schema_meta_free(schema_meta);
 	return result;
 }
-#endif  /* CSTAR_FDW_IMPORT_API */
