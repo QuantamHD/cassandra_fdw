@@ -2,8 +2,10 @@ cassandra_fdw
 =============
 
 Foreign Data Wrapper (FDW) that facilitates access to
-[Cassandra](http://cassandra.apache.org/) 3.X  from within
+[Cassandra](http://cassandra.apache.org/) 3+  from within
 [PG](http://www.postgresql.org/) 10+.
+
+[*DATATYPES*](DATATYPES.md)
 
 
 ## Building from Source ##
