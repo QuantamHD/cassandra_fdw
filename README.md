@@ -1,9 +1,8 @@
 cassandra_fdw
 =============
 
-Foreign Data Wrapper (FDW) that facilitates access to
-[Cassandra](http://cassandra.apache.org/) 3+  from within
-[PG](http://www.postgresql.org/) 10+.
+Foreign Data Wrapper (FDW) that facilitates access to [Cassandra](http://cassandra.apache.org/) 3+  
+from within [PG](http://www.postgresql.org/) 10+.
 
 [*DATATYPES*](DATATYPES.md)
 
@@ -42,8 +41,8 @@ sudo yum install $CPP_DIR/cassandra-cpp-driver-devel-2.9.0-1.el7.centos.x86_64.r
 
 ```sh
 cd ..
-USE_PGXS=1 make
-USE_PGXS=1 make install
+make
+make install
 ```
 
 ## Usage ##
