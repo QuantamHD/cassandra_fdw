@@ -3,3 +3,4 @@ auto/
 /doc.tex
 *.o
 *.so
+.vscode

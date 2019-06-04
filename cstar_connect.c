@@ -240,6 +240,8 @@ connect_cass_server(ForeignServer *server, UserMapping *user)
 		if (svr_username && svr_password)
 			cass_cluster_set_credentials(cluster, svr_username, svr_password);
 
+		cass_cluster_set_resolve_timeout(cluster, 0);
+
 		session = cass_session_new();
 
 		/* Provide the cluster object as configuration to connect the session */
